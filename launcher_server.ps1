@@ -59,9 +59,8 @@ if (-not (Test-Path $ChromeExe)) {
 Write-Log "Chrome:  $ChromeExe"
 
 # ---------- Win32 foreground-focus helper --------------------
-# Brings a newly launched app window to front even when the server
-# process has no foreground lock. keybd_event with KEYEVENTF_KEYUP
-# briefly makes the process input-active, which unblocks SetForegroundWindow.
+# AttachThreadInput to Chrome's input thread gives reliable foreground
+# lock so SetForegroundWindow actually steals focus from fullscreen Chrome.
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -69,18 +68,37 @@ public class KioskFocus {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmd);
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     public static void BringToFront(IntPtr hWnd) {
+        uint dummy;
+        IntPtr fg = GetForegroundWindow();
+        uint fgThread = GetWindowThreadProcessId(fg, out dummy);
+        uint myThread = GetCurrentThreadId();
+        bool attached = (fgThread != myThread) && AttachThreadInput(myThread, fgThread, true);
         keybd_event(0, 0, 2, UIntPtr.Zero);
         ShowWindow(hWnd, 9);
         SetForegroundWindow(hWnd);
+        if (attached) AttachThreadInput(myThread, fgThread, false);
     }
 }
 "@ -ErrorAction SilentlyContinue
 
-function Invoke-Focus($procName) {
-    for ($i = 0; $i -lt 30; $i++) {
+function Start-AppFocused($exe, $argList = $null) {
+    $name = [IO.Path]::GetFileNameWithoutExtension($exe)
+    # Already running with a visible window: bring it front, skip relaunch
+    $visible = Get-Process -Name $name -ErrorAction SilentlyContinue |
+               Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+               Select-Object -First 1
+    if ($visible) { [KioskFocus]::BringToFront($visible.MainWindowHandle); return }
+    # Not running, or tray-only: launch / wake it, then poll up to 5 s for a window
+    if ($argList) { Start-Process $exe -ArgumentList $argList }
+    else          { Start-Process $exe }
+    for ($i = 0; $i -lt 50; $i++) {
         Start-Sleep -Milliseconds 100
-        $w = Get-Process -Name $procName -ErrorAction SilentlyContinue |
+        $w = Get-Process -Name $name -ErrorAction SilentlyContinue |
              Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
              Select-Object -First 1
         if ($w) { [KioskFocus]::BringToFront($w.MainWindowHandle); break }
@@ -163,9 +181,8 @@ while ($listener.IsListening) {
         } elseif ($path -eq "/launch/sonos") {
             Write-Log "Launching Sonos"
             if (Test-Path $SonosExe) {
-                Start-Process $SonosExe
+                Start-AppFocused $SonosExe
                 Send-Json $context @{ success = $true; app = "sonos" }
-                Invoke-Focus "Sonos"
             } else {
                 Write-Log "Sonos exe not found: $SonosExe"
                 Send-Json $context @{ success = $false; error = "Sonos not found. Check SonosExe in CONFIG." } 503
@@ -175,7 +192,7 @@ while ($listener.IsListening) {
         } elseif ($path -eq "/launch/spotify") {
             Write-Log "Launching Spotify"
             if (Test-Path $SpotifyExe) {
-                Start-Process $SpotifyExe
+                Start-AppFocused $SpotifyExe
                 Send-Json $context @{ success = $true; app = "spotify" }
             } else {
                 Write-Log "Spotify exe not found: $SpotifyExe"
@@ -186,9 +203,8 @@ while ($listener.IsListening) {
         } elseif ($path -eq "/launch/btg") {
             Write-Log "Launching By The Glass"
             if (Test-Path $BTGExe) {
-                Start-Process $BTGExe
+                Start-AppFocused $BTGExe
                 Send-Json $context @{ success = $true; app = "btg" }
-                Invoke-Focus "Wine Monitor"
             } else {
                 Write-Log "BTG exe not found: $BTGExe"
                 Send-Json $context @{ success = $false; error = "By The Glass not found. Check BTGExe in CONFIG." } 503
