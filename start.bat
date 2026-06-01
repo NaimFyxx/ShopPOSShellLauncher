@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 :: ============================================================
-:: Fyxx POS Kiosk — start.bat
+:: Fyxx POS Kiosk -- start.bat
 :: Run as Administrator from C:\POS_Launcher\
 :: ============================================================
 
@@ -28,6 +28,16 @@ echo [!date! !time!] Chrome: !CHROME! >> "!LOG!"
 :: ---- Kill any Chrome leftover from a previous session -----
 taskkill /IM chrome.exe /F >nul 2>&1
 timeout /t 3 /nobreak >nul
+
+:: ---- Clear any orphaned port 8080 binding -----------------
+:: If a previous session was killed abruptly the PowerShell HttpListener
+:: process or HTTP.sys reservation can hold port 8080, causing the next
+:: start to fail with "conflicts with an existing registration".
+echo [!date! !time!] Clearing any orphaned port 8080... >> "!LOG!"
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr /i "LISTENING" ^| findstr ":8080"') do (
+    taskkill /PID %%p /F >nul 2>&1
+)
+netsh http delete urlacl url=http://localhost:8080/ >nul 2>&1
 
 :: ---- Start the PowerShell HTTP server (hidden window) -----
 echo [!date! !time!] Starting launcher server... >> "!LOG!"
@@ -72,7 +82,7 @@ start "FyxxPanic" /min powershell.exe ^
 :: ---- Clear stale Chrome singleton files ------------------
 :: Chrome's launcher process checks these files to detect an existing
 :: instance. If they survived a crash or force-kill, Chrome delegates
-:: to the dead instance and the launcher process exits in ~180ms —
+:: to the dead instance and the launcher process exits in ~180ms --
 :: making start.bat see a false "exit" while the browser window is
 :: still visible. Deleting them before launch prevents this.
 if exist "!DIR!chrome_profile_kiosk\SingletonLock"   del /f /q "!DIR!chrome_profile_kiosk\SingletonLock"
@@ -85,7 +95,7 @@ if exist "!DIR!chrome_profile_kiosk\SingletonSocket" del /f /q "!DIR!chrome_prof
 :: WHY: Chrome's initial chrome.exe is a singleton-checker/launcher.
 :: It forks to a child "browser" process and exits in ~180ms. Running
 :: Chrome synchronously (as v2 did) made start.bat see this fast exit,
-:: skip to cleanup, and kill the server — leaving the visible Chrome
+:: skip to cleanup, and kill the server -- leaving the visible Chrome
 :: window with no backend. The fix is to launch async and then poll
 :: tasklist until ALL chrome.exe processes are gone.
 ::
@@ -109,7 +119,7 @@ start "" "!CHROME!" ^
 
 :: Give Chrome time to fork from launcher process to browser process
 timeout /t 4 /nobreak >nul
-echo [!date! !time!] Chrome launched — polling for close... >> "!LOG!"
+echo [!date! !time!] Chrome launched -- polling for close... >> "!LOG!"
 
 :: ---- Poll until all chrome.exe processes are gone --------
 :CHROME_WAIT
@@ -120,9 +130,9 @@ echo [!date! !time!] Chrome launched — polling for close... >> "!LOG!"
     )
 
 :: ---- Cleanup: kill server and panic listener by window title
-:: Does NOT use 'taskkill /IM powershell.exe' — that would kill
+:: Does NOT use 'taskkill /IM powershell.exe' -- that would kill
 :: every PowerShell on the machine including the admin window.
-echo [!date! !time!] Chrome closed — stopping server and panic listener. >> "!LOG!"
+echo [!date! !time!] Chrome closed -- stopping server and panic listener. >> "!LOG!"
 taskkill /FI "WINDOWTITLE eq FyxxServer" /F /T >nul 2>&1
 taskkill /FI "WINDOWTITLE eq FyxxPanic"  /F /T >nul 2>&1
 echo [!date! !time!] Kiosk stopped. >> "!LOG!"

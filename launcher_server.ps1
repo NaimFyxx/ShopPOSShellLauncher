@@ -70,7 +70,7 @@ public class KioskFocus {
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-    [DllImport("user32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     public static void BringToFront(IntPtr hWnd) {
         uint dummy;
@@ -95,7 +95,11 @@ function Start-AppFocused($exe, $argList = $null, $windowTitle = $null, $procNam
                    ($windowTitle -eq $null -or $_.MainWindowTitle -like "*$windowTitle*")
                } |
                Select-Object -First 1
-    if ($visible) { [KioskFocus]::BringToFront($visible.MainWindowHandle); return }
+    if ($visible) {
+        try   { [KioskFocus]::BringToFront($visible.MainWindowHandle) }
+        catch { Write-Log "BringToFront error: $_" }
+        return
+    }
     # Not running, or tray-only: launch / wake it, then poll up to 5 s for a window
     if ($argList) { Start-Process $exe -ArgumentList $argList }
     else          { Start-Process $exe }
@@ -107,7 +111,11 @@ function Start-AppFocused($exe, $argList = $null, $windowTitle = $null, $procNam
                  ($windowTitle -eq $null -or $_.MainWindowTitle -like "*$windowTitle*")
              } |
              Select-Object -First 1
-        if ($w) { [KioskFocus]::BringToFront($w.MainWindowHandle); break }
+        if ($w) {
+            try   { [KioskFocus]::BringToFront($w.MainWindowHandle) }
+            catch { Write-Log "BringToFront error: $_" }
+            break
+        }
     }
 }
 

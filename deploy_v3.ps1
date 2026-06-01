@@ -72,6 +72,16 @@ echo [!date! !time!] Chrome: !CHROME! >> "!LOG!"
 taskkill /IM chrome.exe /F >nul 2>&1
 timeout /t 3 /nobreak >nul
 
+:: ---- Clear any orphaned port 8080 binding -----------------
+:: If a previous session was killed abruptly the PowerShell HttpListener
+:: process or HTTP.sys reservation can hold port 8080, causing the next
+:: start to fail with "conflicts with an existing registration".
+echo [!date! !time!] Clearing any orphaned port 8080... >> "!LOG!"
+for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr /i "LISTENING" ^| findstr ":8080"') do (
+    taskkill /PID %%p /F >nul 2>&1
+)
+netsh http delete urlacl url=http://localhost:8080/ >nul 2>&1
+
 :: ---- Start the PowerShell HTTP server (hidden window) -----
 echo [!date! !time!] Starting launcher server... >> "!LOG!"
 start "FyxxServer" /min powershell.exe ^
@@ -252,7 +262,7 @@ public class KioskFocus {
     [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-    [DllImport("user32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     public static void BringToFront(IntPtr hWnd) {
         uint dummy;
@@ -277,7 +287,11 @@ function Start-AppFocused($exe, $argList = $null, $windowTitle = $null, $procNam
                    ($windowTitle -eq $null -or $_.MainWindowTitle -like "*$windowTitle*")
                } |
                Select-Object -First 1
-    if ($visible) { [KioskFocus]::BringToFront($visible.MainWindowHandle); return }
+    if ($visible) {
+        try   { [KioskFocus]::BringToFront($visible.MainWindowHandle) }
+        catch { Write-Log "BringToFront error: $_" }
+        return
+    }
     # Not running, or tray-only: launch / wake it, then poll up to 5 s for a window
     if ($argList) { Start-Process $exe -ArgumentList $argList }
     else          { Start-Process $exe }
@@ -289,7 +303,11 @@ function Start-AppFocused($exe, $argList = $null, $windowTitle = $null, $procNam
                  ($windowTitle -eq $null -or $_.MainWindowTitle -like "*$windowTitle*")
              } |
              Select-Object -First 1
-        if ($w) { [KioskFocus]::BringToFront($w.MainWindowHandle); break }
+        if ($w) {
+            try   { [KioskFocus]::BringToFront($w.MainWindowHandle) }
+            catch { Write-Log "BringToFront error: $_" }
+            break
+        }
     }
 }
 
