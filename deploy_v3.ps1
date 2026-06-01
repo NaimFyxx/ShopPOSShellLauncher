@@ -1,5 +1,5 @@
 # ==============================================================
-# Fyxx POS Kiosk — Deploy v3
+# Fyxx POS Kiosk -- Deploy v3
 # Run from an Administrator PowerShell window on the POS unit.
 #
 # Usage:
@@ -35,17 +35,17 @@ function Backup-IfExists($name) {
 Backup-IfExists "start.bat"
 Backup-IfExists "launcher_server.ps1"
 Backup-IfExists "index.html"
-# panic_exit.ps1 is new in v3 — no prior backup needed
+# panic_exit.ps1 is new in v3 -- no prior backup needed
 
 # ==============================================================
-# 1 of 4 — start.bat
+# 1 of 4 -- start.bat
 # ==============================================================
 $startBat = @'
 @echo off
 setlocal EnableDelayedExpansion
 
 :: ============================================================
-:: Fyxx POS Kiosk — start.bat
+:: Fyxx POS Kiosk -- start.bat
 :: Run as Administrator from C:\POS_Launcher\
 :: ============================================================
 
@@ -115,7 +115,7 @@ start "FyxxPanic" /min powershell.exe ^
 :: ---- Clear stale Chrome singleton files ------------------
 :: Chrome's launcher process checks these files to detect an existing
 :: instance. If they survived a crash or force-kill, Chrome delegates
-:: to the dead instance and the launcher process exits in ~180ms —
+:: to the dead instance and the launcher process exits in ~180ms --
 :: making start.bat see a false "exit" while the browser window is
 :: still visible. Deleting them before launch prevents this.
 if exist "!DIR!chrome_profile_kiosk\SingletonLock"   del /f /q "!DIR!chrome_profile_kiosk\SingletonLock"
@@ -128,7 +128,7 @@ if exist "!DIR!chrome_profile_kiosk\SingletonSocket" del /f /q "!DIR!chrome_prof
 :: WHY: Chrome's initial chrome.exe is a singleton-checker/launcher.
 :: It forks to a child "browser" process and exits in ~180ms. Running
 :: Chrome synchronously (as v2 did) made start.bat see this fast exit,
-:: skip to cleanup, and kill the server — leaving the visible Chrome
+:: skip to cleanup, and kill the server -- leaving the visible Chrome
 :: window with no backend. The fix is to launch async and then poll
 :: tasklist until ALL chrome.exe processes are gone.
 ::
@@ -152,7 +152,7 @@ start "" "!CHROME!" ^
 
 :: Give Chrome time to fork from launcher process to browser process
 timeout /t 4 /nobreak >nul
-echo [!date! !time!] Chrome launched — polling for close... >> "!LOG!"
+echo [!date! !time!] Chrome launched -- polling for close... >> "!LOG!"
 
 :: ---- Poll until all chrome.exe processes are gone --------
 :CHROME_WAIT
@@ -163,9 +163,9 @@ echo [!date! !time!] Chrome launched — polling for close... >> "!LOG!"
     )
 
 :: ---- Cleanup: kill server and panic listener by window title
-:: Does NOT use 'taskkill /IM powershell.exe' — that would kill
+:: Does NOT use 'taskkill /IM powershell.exe' -- that would kill
 :: every PowerShell on the machine including the admin window.
-echo [!date! !time!] Chrome closed — stopping server and panic listener. >> "!LOG!"
+echo [!date! !time!] Chrome closed -- stopping server and panic listener. >> "!LOG!"
 taskkill /FI "WINDOWTITLE eq FyxxServer" /F /T >nul 2>&1
 taskkill /FI "WINDOWTITLE eq FyxxPanic"  /F /T >nul 2>&1
 echo [!date! !time!] Kiosk stopped. >> "!LOG!"
@@ -177,17 +177,17 @@ Set-Content -Path (Join-Path $Target "start.bat") -Value $startBat -Encoding ASC
 Write-Host "Written     start.bat"
 
 # ==============================================================
-# 2 of 4 — launcher_server.ps1
+# 2 of 4 -- launcher_server.ps1
 # ==============================================================
 $launcherServer = @'
 # ==============================================================
-# Fyxx POS Kiosk — Launcher Server
+# Fyxx POS Kiosk -- Launcher Server
 # Runs an HTTP server on localhost:8080.
 # Launched by start.bat; do not run this script directly.
 # ==============================================================
 
 # ==============================================================
-#  CONFIG  — edit ONLY this block
+#  CONFIG  -- edit ONLY this block
 # ==============================================================
 $AdminPassword = "admin1234"
 
@@ -196,7 +196,7 @@ $ServerPort    = 8080
 # Full path to Chrome executable (auto-detected if left empty)
 $ChromeExe     = ""
 
-# TGR Dine-In — launched as a Chrome App via chrome_proxy
+# TGR Dine-In -- launched as a Chrome App via chrome_proxy
 $TGRExe        = "C:\Program Files\Google\Chrome\Application\chrome_proxy.exe"
 $TGRArgs       = @(
     "--profile-directory=`"Profile 4`"",
@@ -272,7 +272,7 @@ $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://localhost:$ServerPort/")
 try {
     $listener.Start()
-    Write-Log "Server ready — http://localhost:$ServerPort/"
+    Write-Log "Server ready -- http://localhost:$ServerPort/"
 } catch {
     Write-Log "ERROR starting server: $_"
     exit 1
@@ -289,7 +289,7 @@ while ($listener.IsListening) {
         $path    = $context.Request.Url.AbsolutePath
         Write-Log "$method $path"
 
-        # GET / or /index.html — serve the launcher page
+        # GET / or /index.html -- serve the launcher page
         if ($path -eq "/" -or $path -eq "/index.html") {
             if (Test-Path $indexPath) {
                 Send-Bytes $context ([System.IO.File]::ReadAllBytes($indexPath)) "text/html; charset=utf-8"
@@ -297,11 +297,11 @@ while ($listener.IsListening) {
                 Send-Text $context "index.html not found at $indexPath" 404
             }
 
-        # GET /ping — health check used by start.bat readiness loop
+        # GET /ping -- health check used by start.bat readiness loop
         } elseif ($path -eq "/ping") {
             Send-Text $context "OK"
 
-        # POST /launch/tgr — TGR Dine-In Chrome App
+        # POST /launch/tgr -- TGR Dine-In Chrome App
         } elseif ($path -eq "/launch/tgr") {
             Write-Log "Launching TGR Dine-In"
             if (Test-Path $TGRExe) {
@@ -334,7 +334,7 @@ while ($listener.IsListening) {
                 Send-Json $context @{ success = $false; error = "Spotify not found. Check SpotifyExe in CONFIG." } 503
             }
 
-        # POST /launch/btg — By The Glass (Wine Monitor)
+        # POST /launch/btg -- By The Glass (Wine Monitor)
         } elseif ($path -eq "/launch/btg") {
             Write-Log "Launching By The Glass"
             if (Test-Path $BTGExe) {
@@ -345,20 +345,20 @@ while ($listener.IsListening) {
                 Send-Json $context @{ success = $false; error = "By The Glass not found. Check BTGExe in CONFIG." } 503
             }
 
-        # POST /admin/exit — verify password, kill Chrome, stop server
+        # POST /admin/exit -- verify password, kill Chrome, stop server
         } elseif ($path -eq "/admin/exit") {
             $body = Read-Body $context
             try   { $data = $body | ConvertFrom-Json; $pw = $data.password }
             catch { $pw = "" }
 
             if ($pw -eq $AdminPassword) {
-                Write-Log "Admin exit AUTHORIZED — shutting down"
+                Write-Log "Admin exit AUTHORIZED -- shutting down"
                 Send-Json $context @{ success = $true }
                 Start-Sleep -Milliseconds 400    # let response reach browser
                 Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
                 $listener.Stop()                 # exits the while loop
             } else {
-                Write-Log "Admin exit DENIED — wrong password"
+                Write-Log "Admin exit DENIED -- wrong password"
                 Send-Json $context @{ success = $false; error = "Incorrect password." } 401
             }
 
@@ -367,7 +367,7 @@ while ($listener.IsListening) {
         }
 
     } catch [System.Net.HttpListenerException] {
-        break   # listener stopped — clean shutdown
+        break   # listener stopped -- clean shutdown
     } catch {
         Write-Log "Request error: $_"
         try { $context.Response.OutputStream.Close() } catch {}
@@ -381,11 +381,11 @@ Set-Content -Path (Join-Path $Target "launcher_server.ps1") -Value $launcherServ
 Write-Host "Written     launcher_server.ps1"
 
 # ==============================================================
-# 3 of 4 — panic_exit.ps1  (new in v3)
+# 3 of 4 -- panic_exit.ps1  (new in v3)
 # ==============================================================
 $panicExit = @'
 # ==============================================================
-# Fyxx POS Kiosk — Panic Exit Listener
+# Fyxx POS Kiosk -- Panic Exit Listener
 # Polls GetAsyncKeyState for Ctrl+Alt+Shift+Q and force-kills
 # all kiosk processes when the combo is detected.
 # Launched by start.bat alongside the HTTP server.
@@ -400,7 +400,7 @@ function Write-Log($msg) {
     Write-Host "$ts  PANIC: $msg"
 }
 
-# PInvoke GetAsyncKeyState — works from any process regardless of focus
+# PInvoke GetAsyncKeyState -- works from any process regardless of focus
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -420,7 +420,7 @@ while ($true) {
     $q     = ([KioskKeyboard]::GetAsyncKeyState(0x51) -band 0x8000) -ne 0
 
     if ($ctrl -and $alt -and $shift -and $q) {
-        Write-Log "Ctrl+Alt+Shift+Q detected — killing all kiosk processes"
+        Write-Log "Ctrl+Alt+Shift+Q detected -- killing all kiosk processes"
 
         # Chrome (covers kiosk launcher + TGR Dine-In window)
         Stop-Process -Name "chrome"  -Force -ErrorAction SilentlyContinue
@@ -431,7 +431,7 @@ while ($true) {
         # Spotify
         Stop-Process -Name "Spotify" -Force -ErrorAction SilentlyContinue
 
-        # Wine Monitor (process name has a space — match by wildcard)
+        # Wine Monitor (process name has a space -- match by wildcard)
         Get-Process | Where-Object { $_.Name -like "Wine Monitor*" } |
             Stop-Process -Force -ErrorAction SilentlyContinue
 
@@ -455,7 +455,7 @@ Set-Content -Path (Join-Path $Target "panic_exit.ps1") -Value $panicExit -Encodi
 Write-Host "Written     panic_exit.ps1"
 
 # ==============================================================
-# 4 of 4 — index.html
+# 4 of 4 -- index.html
 # ==============================================================
 $indexHtml = @'
 <!DOCTYPE html>
@@ -464,7 +464,7 @@ $indexHtml = @'
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#16141a">
-  <title>Fyxx — POS Launcher</title>
+  <title>Fyxx -- POS Launcher</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=Raleway:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -524,7 +524,7 @@ $indexHtml = @'
       pointer-events: none;
     }
 
-    /* ── HEADER ───────────────────────────────────────────── */
+    /* -- HEADER --------------------------------------------- */
     .header {
       flex: 0 0 18vh;
       display: flex;
@@ -567,7 +567,7 @@ $indexHtml = @'
       color: var(--text-sub);
     }
 
-    /* ── MAIN — 2x2 TILE GRID ─────────────────────────────── */
+    /* -- MAIN -- 2x2 TILE GRID ------------------------------- */
     .main {
       flex: 1;
       display: grid;
@@ -578,7 +578,7 @@ $indexHtml = @'
       align-items: stretch;
     }
 
-    /* ── TILES ────────────────────────────────────────────── */
+    /* -- TILES ---------------------------------------------- */
     .tile {
       min-width: 0;
       min-height: 120px;
@@ -628,7 +628,7 @@ $indexHtml = @'
       border-color: rgba(201,168,76,0.5);
     }
 
-    /* ── TILE ICON ────────────────────────────────────────── */
+    /* -- TILE ICON ------------------------------------------ */
     .tile-icon {
       width: clamp(44px, 5.5vw, 72px);
       height: clamp(44px, 5.5vw, 72px);
@@ -638,7 +638,7 @@ $indexHtml = @'
 
     .tile-icon svg { width: 100%; height: 100%; }
 
-    /* ── SPINNER (shown while launching) ──────────────────── */
+    /* -- SPINNER (shown while launching) -------------------- */
     .tile-spinner {
       display: none;
       width: clamp(24px, 3vw, 36px);
@@ -655,7 +655,7 @@ $indexHtml = @'
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── TILE TEXT ────────────────────────────────────────── */
+    /* -- TILE TEXT ------------------------------------------ */
     .tile-label {
       font-size: clamp(0.95rem, 2vw, 1.45rem);
       font-weight: 600;
@@ -673,7 +673,7 @@ $indexHtml = @'
       text-transform: uppercase;
     }
 
-    /* ── FOOTER ───────────────────────────────────────────── */
+    /* -- FOOTER --------------------------------------------- */
     .footer {
       flex: 0 0 12vh;
       display: flex;
@@ -712,7 +712,7 @@ $indexHtml = @'
       opacity: 0.55;
     }
 
-    /* ── TOAST NOTIFICATIONS ──────────────────────────────── */
+    /* -- TOAST NOTIFICATIONS -------------------------------- */
     #toast-container {
       position: fixed;
       bottom: 2rem;
@@ -743,7 +743,7 @@ $indexHtml = @'
     @keyframes toastIn  { from { opacity:0; transform: translateY(10px) scale(0.96); } to { opacity:1; transform: translateY(0) scale(1); } }
     @keyframes toastOut { from { opacity:1; } to { opacity:0; transform: translateY(-6px); } }
 
-    /* ── ADMIN OVERLAY ────────────────────────────────────── */
+    /* -- ADMIN OVERLAY -------------------------------------- */
     #admin-overlay {
       position: fixed;
       inset: 0;
@@ -873,16 +873,16 @@ $indexHtml = @'
 </head>
 <body>
 
-  <!-- ── HEADER (triple-tap FYXX wordmark to open admin modal) -->
+  <!-- -- HEADER (triple-tap FYXX wordmark to open admin modal) -->
   <header class="header">
-    <div class="wordmark" id="logo" role="button" aria-label="Fyxx — triple-tap for admin">FYXX</div>
+    <div class="wordmark" id="logo" role="button" aria-label="Fyxx -- triple-tap for admin">FYXX</div>
     <div class="tagline">Wine &amp; Spirits &nbsp;&middot;&nbsp; Amman</div>
   </header>
 
-  <!-- ── 2x2 TILE GRID ──────────────────────────────────────── -->
+  <!-- -- 2x2 TILE GRID ---------------------------------------- -->
   <main class="main">
 
-    <!-- Row 1, Col 1 — TGR Dine-In -->
+    <!-- Row 1, Col 1 -- TGR Dine-In -->
     <div class="tile" id="tile-tgr" role="button" aria-label="Launch TGR Dine-In">
       <div class="tile-icon" aria-hidden="true">
         <!-- Fork + knife -->
@@ -901,7 +901,7 @@ $indexHtml = @'
       <div class="tile-sub">Table Service</div>
     </div>
 
-    <!-- Row 1, Col 2 — Sonos -->
+    <!-- Row 1, Col 2 -- Sonos -->
     <div class="tile" id="tile-sonos" role="button" aria-label="Launch Sonos">
       <div class="tile-icon" aria-hidden="true">
         <!-- Speaker + sound waves -->
@@ -917,7 +917,7 @@ $indexHtml = @'
       <div class="tile-sub">Music Control</div>
     </div>
 
-    <!-- Row 2, Col 1 — Spotify -->
+    <!-- Row 2, Col 1 -- Spotify -->
     <div class="tile" id="tile-spotify" role="button" aria-label="Launch Spotify">
       <div class="tile-icon" aria-hidden="true">
         <!-- Two musical notes on a shared beam -->
@@ -935,7 +935,7 @@ $indexHtml = @'
       <div class="tile-sub">Streaming</div>
     </div>
 
-    <!-- Row 2, Col 2 — By The Glass -->
+    <!-- Row 2, Col 2 -- By The Glass -->
     <div class="tile" id="tile-btg" role="button" aria-label="Launch By The Glass">
       <div class="tile-icon" aria-hidden="true">
         <!-- Wine glass -->
@@ -954,16 +954,16 @@ $indexHtml = @'
 
   </main>
 
-  <!-- ── FOOTER ─────────────────────────────────────────────── -->
+  <!-- -- FOOTER ----------------------------------------------- -->
   <footer class="footer">
     <div class="clock"    id="clock">--:--</div>
     <div class="date-str" id="date-str"></div>
   </footer>
 
-  <!-- ── TOAST CONTAINER ────────────────────────────────────── -->
+  <!-- -- TOAST CONTAINER -------------------------------------- -->
   <div id="toast-container" aria-live="polite"></div>
 
-  <!-- ── ADMIN OVERLAY ──────────────────────────────────────── -->
+  <!-- -- ADMIN OVERLAY ---------------------------------------- -->
   <div id="admin-overlay" role="dialog" aria-modal="true" aria-label="Admin exit">
     <div class="admin-modal">
       <h2>Admin Exit</h2>
@@ -983,7 +983,7 @@ $indexHtml = @'
   <script>
     'use strict';
 
-    // ── CLOCK ─────────────────────────────────────────────────
+    // -- CLOCK -------------------------------------------------
     (function () {
       var clockEl = document.getElementById('clock');
       var dateEl  = document.getElementById('date-str');
@@ -996,7 +996,7 @@ $indexHtml = @'
         var h   = String(now.getHours()).padStart(2, '0');
         var m   = String(now.getMinutes()).padStart(2, '0');
         clockEl.textContent = h + ':' + m;
-        dateEl.textContent  = DAYS[now.getDay()] + '  ·  ' +
+        dateEl.textContent  = DAYS[now.getDay()] + '  .  ' +
           now.getDate() + ' ' + MONTHS[now.getMonth()] + ' ' + now.getFullYear();
       }
 
@@ -1004,7 +1004,7 @@ $indexHtml = @'
       setInterval(tick, 15000);
     })();
 
-    // ── TOAST ─────────────────────────────────────────────────
+    // -- TOAST -------------------------------------------------
     function showToast(message, type) {
       var container = document.getElementById('toast-container');
       var el = document.createElement('div');
@@ -1014,11 +1014,11 @@ $indexHtml = @'
       setTimeout(function () { el.remove(); }, 3200);
     }
 
-    // ── TILE LAUNCH ───────────────────────────────────────────
+    // -- TILE LAUNCH -------------------------------------------
     async function launchApp(endpoint, label, tileEl) {
       if (tileEl.classList.contains('launching')) return;
       tileEl.classList.add('launching');
-      showToast('Launching ' + label + '…', 'info');
+      showToast('Launching ' + label + '...', 'info');
       try {
         var res  = await fetch(endpoint, { method: 'POST' });
         var data = await res.json();
@@ -1026,7 +1026,7 @@ $indexHtml = @'
           showToast(data.error || 'Failed to launch. Check launcher.log.', 'error');
         }
       } catch (e) {
-        showToast('Server not responding — restart start.bat', 'error');
+        showToast('Server not responding -- restart start.bat', 'error');
       } finally {
         setTimeout(function () { tileEl.classList.remove('launching'); }, 900);
       }
@@ -1054,7 +1054,7 @@ $indexHtml = @'
     bindTile('tile-spotify', '/launch/spotify', 'Spotify');
     bindTile('tile-btg',     '/launch/btg',     'By The Glass');
 
-    // ── TRIPLE-TAP ADMIN ──────────────────────────────────────
+    // -- TRIPLE-TAP ADMIN --------------------------------------
     (function () {
       var logo    = document.getElementById('logo');
       var overlay = document.getElementById('admin-overlay');
@@ -1131,7 +1131,7 @@ $indexHtml = @'
 
           if (data.success) {
             errEl.style.color = '#5cc990';
-            errEl.textContent = 'Shutting down kiosk…';
+            errEl.textContent = 'Shutting down kiosk...';
           } else {
             errEl.style.color = 'var(--danger)';
             errEl.textContent = data.error || 'Incorrect password.';
@@ -1140,9 +1140,9 @@ $indexHtml = @'
             btnExit.disabled = false;
           }
         } catch (fetchErr) {
-          // Chrome being killed causes fetch to throw — that is the success path
+          // Chrome being killed causes fetch to throw -- that is the success path
           errEl.style.color = '#5cc990';
-          errEl.textContent = 'Kiosk shutting down…';
+          errEl.textContent = 'Kiosk shutting down...';
         }
       }
 
@@ -1175,5 +1175,5 @@ Write-Host "Next step:"
 Write-Host "  cmd /c `"$Target\start.bat`""
 Write-Host ""
 Write-Host "Test sequence:"
-Write-Host "  1. Immediately press Ctrl+Alt+Shift+Q — should kill everything"
+Write-Host "  1. Immediately press Ctrl+Alt+Shift+Q -- should kill everything"
 Write-Host "  2. Only if panic exit works: test tiles and admin modal"
