@@ -1,11 +1,11 @@
 # ==============================================================
-# Fyxx POS Kiosk — Launcher Server
+# Fyxx POS Kiosk -- Launcher Server
 # Runs an HTTP server on localhost:8080.
 # Launched by start.bat; do not run this script directly.
 # ==============================================================
 
 # ==============================================================
-#  CONFIG  — edit ONLY this block
+#  CONFIG  -- edit ONLY this block
 # ==============================================================
 $AdminPassword = "admin1234"
 
@@ -14,7 +14,7 @@ $ServerPort    = 8080
 # Full path to Chrome executable (auto-detected if left empty)
 $ChromeExe     = ""
 
-# TGR Dine-In — launched as a Chrome App via chrome_proxy
+# TGR Dine-In -- launched as a Chrome App via chrome_proxy
 $TGRExe        = "C:\Program Files\Google\Chrome\Application\chrome_proxy.exe"
 $TGRArgs       = @(
     "--profile-directory=`"Profile 4`"",
@@ -28,7 +28,7 @@ $SonosExe      = "C:\Program Files (x86)\SonosV2\Sonos.exe"
 $SpotifyExe    = "C:\Users\NCR\AppData\Roaming\Spotify\Spotify.exe"
 
 # By The Glass (Wine Monitor)
-$BTGExe        = "C:\Users\NCR\AppData\Local\WineMonitor\Wine Monitor.exe"
+$BTGExe        = "C:\Users\NCR\AppData\Local\WineMonitor\app-1.1.1\Wine Monitor.exe"
 # ==============================================================
 #  END CONFIG
 # ==============================================================
@@ -57,6 +57,35 @@ if (-not (Test-Path $ChromeExe)) {
     exit 1
 }
 Write-Log "Chrome:  $ChromeExe"
+
+# ---------- Win32 foreground-focus helper --------------------
+# Brings a newly launched app window to front even when the server
+# process has no foreground lock. keybd_event with KEYEVENTF_KEYUP
+# briefly makes the process input-active, which unblocks SetForegroundWindow.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class KioskFocus {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmd);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    public static void BringToFront(IntPtr hWnd) {
+        keybd_event(0, 0, 2, UIntPtr.Zero);
+        ShowWindow(hWnd, 9);
+        SetForegroundWindow(hWnd);
+    }
+}
+"@ -ErrorAction SilentlyContinue
+
+function Invoke-Focus($procName) {
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 100
+        $w = Get-Process -Name $procName -ErrorAction SilentlyContinue |
+             Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+             Select-Object -First 1
+        if ($w) { [KioskFocus]::BringToFront($w.MainWindowHandle); break }
+    }
+}
 
 # ---------- HTTP helpers -------------------------------------
 function Send-Bytes($context, $bytes, $contentType, $statusCode = 200) {
@@ -90,7 +119,7 @@ $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://localhost:$ServerPort/")
 try {
     $listener.Start()
-    Write-Log "Server ready — http://localhost:$ServerPort/"
+    Write-Log "Server ready -- http://localhost:$ServerPort/"
 } catch {
     Write-Log "ERROR starting server: $_"
     exit 1
@@ -107,7 +136,7 @@ while ($listener.IsListening) {
         $path    = $context.Request.Url.AbsolutePath
         Write-Log "$method $path"
 
-        # GET / or /index.html — serve the launcher page
+        # GET / or /index.html -- serve the launcher page
         if ($path -eq "/" -or $path -eq "/index.html") {
             if (Test-Path $indexPath) {
                 Send-Bytes $context ([System.IO.File]::ReadAllBytes($indexPath)) "text/html; charset=utf-8"
@@ -115,11 +144,11 @@ while ($listener.IsListening) {
                 Send-Text $context "index.html not found at $indexPath" 404
             }
 
-        # GET /ping — health check used by start.bat readiness loop
+        # GET /ping -- health check used by start.bat readiness loop
         } elseif ($path -eq "/ping") {
             Send-Text $context "OK"
 
-        # POST /launch/tgr — TGR Dine-In Chrome App
+        # POST /launch/tgr -- TGR Dine-In Chrome App
         } elseif ($path -eq "/launch/tgr") {
             Write-Log "Launching TGR Dine-In"
             if (Test-Path $TGRExe) {
@@ -136,6 +165,7 @@ while ($listener.IsListening) {
             if (Test-Path $SonosExe) {
                 Start-Process $SonosExe
                 Send-Json $context @{ success = $true; app = "sonos" }
+                Invoke-Focus "Sonos"
             } else {
                 Write-Log "Sonos exe not found: $SonosExe"
                 Send-Json $context @{ success = $false; error = "Sonos not found. Check SonosExe in CONFIG." } 503
@@ -152,31 +182,32 @@ while ($listener.IsListening) {
                 Send-Json $context @{ success = $false; error = "Spotify not found. Check SpotifyExe in CONFIG." } 503
             }
 
-        # POST /launch/btg — By The Glass (Wine Monitor)
+        # POST /launch/btg -- By The Glass (Wine Monitor)
         } elseif ($path -eq "/launch/btg") {
             Write-Log "Launching By The Glass"
             if (Test-Path $BTGExe) {
                 Start-Process $BTGExe
                 Send-Json $context @{ success = $true; app = "btg" }
+                Invoke-Focus "Wine Monitor"
             } else {
                 Write-Log "BTG exe not found: $BTGExe"
                 Send-Json $context @{ success = $false; error = "By The Glass not found. Check BTGExe in CONFIG." } 503
             }
 
-        # POST /admin/exit — verify password, kill Chrome, stop server
+        # POST /admin/exit -- verify password, kill Chrome, stop server
         } elseif ($path -eq "/admin/exit") {
             $body = Read-Body $context
             try   { $data = $body | ConvertFrom-Json; $pw = $data.password }
             catch { $pw = "" }
 
             if ($pw -eq $AdminPassword) {
-                Write-Log "Admin exit AUTHORIZED — shutting down"
+                Write-Log "Admin exit AUTHORIZED -- shutting down"
                 Send-Json $context @{ success = $true }
                 Start-Sleep -Milliseconds 400    # let response reach browser
                 Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
                 $listener.Stop()                 # exits the while loop
             } else {
-                Write-Log "Admin exit DENIED — wrong password"
+                Write-Log "Admin exit DENIED -- wrong password"
                 Send-Json $context @{ success = $false; error = "Incorrect password." } 401
             }
 
@@ -185,7 +216,7 @@ while ($listener.IsListening) {
         }
 
     } catch [System.Net.HttpListenerException] {
-        break   # listener stopped — clean shutdown
+        break   # listener stopped -- clean shutdown
     } catch {
         Write-Log "Request error: $_"
         try { $context.Response.OutputStream.Close() } catch {}

@@ -210,7 +210,7 @@ $SonosExe      = "C:\Program Files (x86)\SonosV2\Sonos.exe"
 $SpotifyExe    = "C:\Users\NCR\AppData\Roaming\Spotify\Spotify.exe"
 
 # By The Glass (Wine Monitor)
-$BTGExe        = "C:\Users\NCR\AppData\Local\WineMonitor\Wine Monitor.exe"
+$BTGExe        = "C:\Users\NCR\AppData\Local\WineMonitor\app-1.1.1\Wine Monitor.exe"
 # ==============================================================
 #  END CONFIG
 # ==============================================================
@@ -239,6 +239,35 @@ if (-not (Test-Path $ChromeExe)) {
     exit 1
 }
 Write-Log "Chrome:  $ChromeExe"
+
+# ---------- Win32 foreground-focus helper --------------------
+# Brings a newly launched app window to front even when the server
+# process has no foreground lock. keybd_event with KEYEVENTF_KEYUP
+# briefly makes the process input-active, which unblocks SetForegroundWindow.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class KioskFocus {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmd);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    public static void BringToFront(IntPtr hWnd) {
+        keybd_event(0, 0, 2, UIntPtr.Zero);
+        ShowWindow(hWnd, 9);
+        SetForegroundWindow(hWnd);
+    }
+}
+"@ -ErrorAction SilentlyContinue
+
+function Invoke-Focus($procName) {
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 100
+        $w = Get-Process -Name $procName -ErrorAction SilentlyContinue |
+             Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+             Select-Object -First 1
+        if ($w) { [KioskFocus]::BringToFront($w.MainWindowHandle); break }
+    }
+}
 
 # ---------- HTTP helpers -------------------------------------
 function Send-Bytes($context, $bytes, $contentType, $statusCode = 200) {
@@ -318,6 +347,7 @@ while ($listener.IsListening) {
             if (Test-Path $SonosExe) {
                 Start-Process $SonosExe
                 Send-Json $context @{ success = $true; app = "sonos" }
+                Invoke-Focus "Sonos"
             } else {
                 Write-Log "Sonos exe not found: $SonosExe"
                 Send-Json $context @{ success = $false; error = "Sonos not found. Check SonosExe in CONFIG." } 503
@@ -340,6 +370,7 @@ while ($listener.IsListening) {
             if (Test-Path $BTGExe) {
                 Start-Process $BTGExe
                 Send-Json $context @{ success = $true; app = "btg" }
+                Invoke-Focus "Wine Monitor"
             } else {
                 Write-Log "BTG exe not found: $BTGExe"
                 Send-Json $context @{ success = $false; error = "By The Glass not found. Check BTGExe in CONFIG." } 503
