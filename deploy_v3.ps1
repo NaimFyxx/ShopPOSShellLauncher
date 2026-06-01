@@ -72,6 +72,14 @@ echo [!date! !time!] Chrome: !CHROME! >> "!LOG!"
 taskkill /IM chrome.exe /F >nul 2>&1
 timeout /t 3 /nobreak >nul
 
+:: ---- Kill any orphan launcher_server / panic_exit PS processes ----------
+:: WMI command-line match is the only reliable way to target specific PS
+:: scripts without killing every powershell.exe on the machine.
+echo [!date! !time!] Killing orphan launcher/panic PS processes... >> "!LOG!"
+powershell -NoProfile -NonInteractive -Command ^
+  "Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'powershell.exe' -and ($_.CommandLine -like '*launcher_server*' -or $_.CommandLine -like '*panic_exit*') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" ^
+  >nul 2>&1
+
 :: ---- Clear any orphaned port 8080 binding -----------------
 :: If a previous session was killed abruptly the PowerShell HttpListener
 :: process or HTTP.sys reservation can hold port 8080, causing the next
