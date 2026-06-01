@@ -268,11 +268,14 @@ public class KioskFocus {
 }
 "@ -ErrorAction SilentlyContinue
 
-function Start-AppFocused($exe, $argList = $null) {
-    $name = [IO.Path]::GetFileNameWithoutExtension($exe)
-    # Already running with a visible window: bring it front, skip relaunch
-    $visible = Get-Process -Name $name -ErrorAction SilentlyContinue |
-               Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+function Start-AppFocused($exe, $argList = $null, $windowTitle = $null, $procName = $null) {
+    if (-not $procName) { $procName = [IO.Path]::GetFileNameWithoutExtension($exe) }
+    # Already running with a visible window (optionally filtered by title): bring front
+    $visible = Get-Process -Name $procName -ErrorAction SilentlyContinue |
+               Where-Object {
+                   $_.MainWindowHandle -ne [IntPtr]::Zero -and
+                   ($windowTitle -eq $null -or $_.MainWindowTitle -like "*$windowTitle*")
+               } |
                Select-Object -First 1
     if ($visible) { [KioskFocus]::BringToFront($visible.MainWindowHandle); return }
     # Not running, or tray-only: launch / wake it, then poll up to 5 s for a window
@@ -280,8 +283,11 @@ function Start-AppFocused($exe, $argList = $null) {
     else          { Start-Process $exe }
     for ($i = 0; $i -lt 50; $i++) {
         Start-Sleep -Milliseconds 100
-        $w = Get-Process -Name $name -ErrorAction SilentlyContinue |
-             Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+        $w = Get-Process -Name $procName -ErrorAction SilentlyContinue |
+             Where-Object {
+                 $_.MainWindowHandle -ne [IntPtr]::Zero -and
+                 ($windowTitle -eq $null -or $_.MainWindowTitle -like "*$windowTitle*")
+             } |
              Select-Object -First 1
         if ($w) { [KioskFocus]::BringToFront($w.MainWindowHandle); break }
     }
@@ -352,7 +358,7 @@ while ($listener.IsListening) {
         } elseif ($path -eq "/launch/tgr") {
             Write-Log "Launching TGR Dine-In"
             if (Test-Path $TGRExe) {
-                Start-Process $TGRExe -ArgumentList $TGRArgs
+                Start-AppFocused $TGRExe $TGRArgs "Dine-In" "chrome"
                 Send-Json $context @{ success = $true; app = "tgr" }
             } else {
                 Write-Log "TGR exe not found: $TGRExe"
