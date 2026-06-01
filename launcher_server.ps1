@@ -7,19 +7,28 @@
 # ==============================================================
 #  CONFIG  — edit ONLY this block
 # ==============================================================
-$AdminPassword = "Fyxx2024!"           # <-- CHANGE BEFORE GOING LIVE
+$AdminPassword = "admin1234"
 
 $ServerPort    = 8080
 
-# Full path to the Chrome executable (auto-detected if left empty)
+# Full path to Chrome executable (auto-detected if left empty)
 $ChromeExe     = ""
 
-# Full path to the By The Glass executable
-# Set this before going live — the tile will show an error until it is set.
-$BTGExe        = "C:\PLACEHOLDER\ByTheGlass.exe"   # <-- FILL IN BEFORE GOING LIVE
+# TGR Dine-In — launched as a Chrome App via chrome_proxy
+$TGRExe        = "C:\Program Files\Google\Chrome\Application\chrome_proxy.exe"
+$TGRArgs       = @(
+    "--profile-directory=`"Profile 4`"",
+    "--app-id=jpofjnaefngkijignheehkddokdjbglo"
+)
 
-# Odoo POS URL
-$OdooUrl       = "https://fyxx.odoo.com/odoo/point-of-sale"
+# Sonos
+$SonosExe      = "C:\Program Files (x86)\SonosV2\Sonos.exe"
+
+# Spotify
+$SpotifyExe    = "C:\Users\NCR\AppData\Roaming\Spotify\Spotify.exe"
+
+# By The Glass (Wine Monitor)
+$BTGExe        = "C:\Users\NCR\AppData\Local\WineMonitor\Wine Monitor.exe"
 # ==============================================================
 #  END CONFIG
 # ==============================================================
@@ -36,21 +45,18 @@ function Write-Log($msg) {
 
 # ---------- Auto-detect Chrome if path not specified ----------
 if ([string]::IsNullOrEmpty($ChromeExe)) {
-    $candidates = @(
+    foreach ($c in @(
         "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
         "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
-    )
-    foreach ($c in $candidates) {
+    )) {
         if (Test-Path $c) { $ChromeExe = $c; break }
     }
 }
-if ([string]::IsNullOrEmpty($ChromeExe) -or -not (Test-Path $ChromeExe)) {
-    Write-Log "ERROR: Chrome not found. Install Google Chrome or set ChromeExe in the CONFIG block."
+if (-not (Test-Path $ChromeExe)) {
+    Write-Log "ERROR: Chrome not found. Set ChromeExe in CONFIG block."
     exit 1
 }
-Write-Log "Chrome:      $ChromeExe"
-Write-Log "BTG exe:     $BTGExe"
-Write-Log "Odoo URL:    $OdooUrl"
+Write-Log "Chrome:  $ChromeExe"
 
 # ---------- HTTP helpers -------------------------------------
 function Send-Bytes($context, $bytes, $contentType, $statusCode = 200) {
@@ -62,8 +68,7 @@ function Send-Bytes($context, $bytes, $contentType, $statusCode = 200) {
 }
 
 function Send-Json($context, $obj, $statusCode = 200) {
-    $json  = $obj | ConvertTo-Json -Compress
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Compress))
     Send-Bytes $context $bytes "application/json; charset=utf-8" $statusCode
 }
 
@@ -73,19 +78,16 @@ function Send-Text($context, $text, $statusCode = 200) {
 }
 
 function Read-Body($context) {
-    $reader = [System.IO.StreamReader]::new(
+    ([System.IO.StreamReader]::new(
         $context.Request.InputStream,
         $context.Request.ContentEncoding
-    )
-    return $reader.ReadToEnd()
+    )).ReadToEnd()
 }
 
 # ---------- Start the HTTP listener --------------------------
 Write-Log "Starting server on port $ServerPort"
-
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://localhost:$ServerPort/")
-
 try {
     $listener.Start()
     Write-Log "Server ready — http://localhost:$ServerPort/"
@@ -103,41 +105,54 @@ while ($listener.IsListening) {
         $context = $listener.GetContext()
         $method  = $context.Request.HttpMethod
         $path    = $context.Request.Url.AbsolutePath
-
         Write-Log "$method $path"
 
-        # GET / — serve the launcher page
+        # GET / or /index.html — serve the launcher page
         if ($path -eq "/" -or $path -eq "/index.html") {
             if (Test-Path $indexPath) {
-                $bytes = [System.IO.File]::ReadAllBytes($indexPath)
-                Send-Bytes $context $bytes "text/html; charset=utf-8"
+                Send-Bytes $context ([System.IO.File]::ReadAllBytes($indexPath)) "text/html; charset=utf-8"
             } else {
                 Send-Text $context "index.html not found at $indexPath" 404
             }
 
-        # GET /ping — health check used by start.bat
+        # GET /ping — health check used by start.bat readiness loop
         } elseif ($path -eq "/ping") {
             Send-Text $context "OK"
 
-        # POST /launch/odoo — open Odoo POS in a second Chrome window
-        } elseif ($path -eq "/launch/odoo") {
-            Write-Log "Launching Odoo POS"
-            $odooProfile = Join-Path $LauncherDir "chrome_profile_odoo"
-            $args = @(
-                "--app=$OdooUrl",
-                "--start-fullscreen",
-                "--no-first-run",
-                "--disable-infobars",
-                "--disable-session-crashed-bubble",
-                "--disable-restore-session-state",
-                "--no-default-browser-check",
-                "--password-store=basic",
-                "--user-data-dir=`"$odooProfile`""
-            )
-            Start-Process $ChromeExe -ArgumentList $args
-            Send-Json $context @{ success = $true; app = "odoo" }
+        # POST /launch/tgr — TGR Dine-In Chrome App
+        } elseif ($path -eq "/launch/tgr") {
+            Write-Log "Launching TGR Dine-In"
+            if (Test-Path $TGRExe) {
+                Start-Process $TGRExe -ArgumentList $TGRArgs
+                Send-Json $context @{ success = $true; app = "tgr" }
+            } else {
+                Write-Log "TGR exe not found: $TGRExe"
+                Send-Json $context @{ success = $false; error = "TGR Dine-In not found. Check TGRExe in CONFIG." } 503
+            }
 
-        # POST /launch/btg — launch the By The Glass executable
+        # POST /launch/sonos
+        } elseif ($path -eq "/launch/sonos") {
+            Write-Log "Launching Sonos"
+            if (Test-Path $SonosExe) {
+                Start-Process $SonosExe
+                Send-Json $context @{ success = $true; app = "sonos" }
+            } else {
+                Write-Log "Sonos exe not found: $SonosExe"
+                Send-Json $context @{ success = $false; error = "Sonos not found. Check SonosExe in CONFIG." } 503
+            }
+
+        # POST /launch/spotify
+        } elseif ($path -eq "/launch/spotify") {
+            Write-Log "Launching Spotify"
+            if (Test-Path $SpotifyExe) {
+                Start-Process $SpotifyExe
+                Send-Json $context @{ success = $true; app = "spotify" }
+            } else {
+                Write-Log "Spotify exe not found: $SpotifyExe"
+                Send-Json $context @{ success = $false; error = "Spotify not found. Check SpotifyExe in CONFIG." } 503
+            }
+
+        # POST /launch/btg — By The Glass (Wine Monitor)
         } elseif ($path -eq "/launch/btg") {
             Write-Log "Launching By The Glass"
             if (Test-Path $BTGExe) {
@@ -145,13 +160,10 @@ while ($listener.IsListening) {
                 Send-Json $context @{ success = $true; app = "btg" }
             } else {
                 Write-Log "BTG exe not found: $BTGExe"
-                Send-Json $context @{
-                    success = $false
-                    error   = "By The Glass executable not found. Update the BTGExe path in the CONFIG block of launcher_server.ps1."
-                } 503
+                Send-Json $context @{ success = $false; error = "By The Glass not found. Check BTGExe in CONFIG." } 503
             }
 
-        # POST /admin/exit — verify password then kill Chrome and stop server
+        # POST /admin/exit — verify password, kill Chrome, stop server
         } elseif ($path -eq "/admin/exit") {
             $body = Read-Body $context
             try   { $data = $body | ConvertFrom-Json; $pw = $data.password }
@@ -160,9 +172,9 @@ while ($listener.IsListening) {
             if ($pw -eq $AdminPassword) {
                 Write-Log "Admin exit AUTHORIZED — shutting down"
                 Send-Json $context @{ success = $true }
-                Start-Sleep -Milliseconds 400          # let response reach the browser
+                Start-Sleep -Milliseconds 400    # let response reach browser
                 Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
-                $listener.Stop()                       # exits the while loop
+                $listener.Stop()                 # exits the while loop
             } else {
                 Write-Log "Admin exit DENIED — wrong password"
                 Send-Json $context @{ success = $false; error = "Incorrect password." } 401
@@ -173,7 +185,7 @@ while ($listener.IsListening) {
         }
 
     } catch [System.Net.HttpListenerException] {
-        break   # listener was stopped — clean shutdown
+        break   # listener stopped — clean shutdown
     } catch {
         Write-Log "Request error: $_"
         try { $context.Response.OutputStream.Close() } catch {}

@@ -1,3 +1,463 @@
+# ==============================================================
+# Fyxx POS Kiosk — Deploy v3
+# Run from an Administrator PowerShell window on the POS unit.
+#
+# Usage:
+#   1. Copy this entire file to C:\POS_Launcher\deploy_v3.ps1
+#   2. Open PowerShell as Administrator
+#   3. cd C:\POS_Launcher
+#   4. Set-ExecutionPolicy Bypass -Scope Process -Force
+#   5. .\deploy_v3.ps1
+#
+# What it does:
+#   - Creates C:\POS_Launcher\ if it does not exist
+#   - Backs up existing v2 files to *.v2.bak
+#   - Writes all four v3 files: start.bat, launcher_server.ps1,
+#     panic_exit.ps1 (new), index.html
+# ==============================================================
+
+$Target = "C:\POS_Launcher"
+
+if (-not (Test-Path $Target)) {
+    New-Item -ItemType Directory -Path $Target -Force | Out-Null
+    Write-Host "Created $Target"
+}
+
+function Backup-IfExists($name) {
+    $src = Join-Path $Target $name
+    $dst = Join-Path $Target ($name + ".v2.bak")
+    if (Test-Path $src) {
+        Copy-Item $src $dst -Force
+        Write-Host "Backed up  $name  ->  $name.v2.bak"
+    }
+}
+
+Backup-IfExists "start.bat"
+Backup-IfExists "launcher_server.ps1"
+Backup-IfExists "index.html"
+# panic_exit.ps1 is new in v3 — no prior backup needed
+
+# ==============================================================
+# 1 of 4 — start.bat
+# ==============================================================
+$startBat = @'
+@echo off
+setlocal EnableDelayedExpansion
+
+:: ============================================================
+:: Fyxx POS Kiosk — start.bat
+:: Run as Administrator from C:\POS_Launcher\
+:: ============================================================
+
+set "DIR=%~dp0"
+set "LOG=!DIR!launcher.log"
+
+echo. >> "!LOG!"
+echo [!date! !time!] ========== KIOSK SESSION START ========== >> "!LOG!"
+
+:: ---- Detect Chrome ----------------------------------------
+set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+if not exist "!CHROME!" set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+if not exist "!CHROME!" (
+    echo [!date! !time!] ERROR: chrome.exe not found. >> "!LOG!"
+    echo.
+    echo  Chrome not found. Install Google Chrome and try again.
+    echo.
+    pause
+    exit /b 1
+)
+echo [!date! !time!] Chrome: !CHROME! >> "!LOG!"
+
+:: ---- Kill any Chrome leftover from a previous session -----
+taskkill /IM chrome.exe /F >nul 2>&1
+timeout /t 3 /nobreak >nul
+
+:: ---- Start the PowerShell HTTP server (hidden window) -----
+echo [!date! !time!] Starting launcher server... >> "!LOG!"
+start "FyxxServer" /min powershell.exe ^
+    -ExecutionPolicy Bypass ^
+    -WindowStyle Hidden ^
+    -NonInteractive ^
+    -File "!DIR!launcher_server.ps1"
+
+:: ---- Wait up to 30 s for server /ping --------------------
+echo [!date! !time!] Waiting for server... >> "!LOG!"
+set TRIES=0
+:WAIT_LOOP
+    set /a TRIES+=1
+    if !TRIES! GTR 30 goto :SERVER_TIMEOUT
+    powershell -NoProfile -NonInteractive -Command ^
+      "try{Invoke-WebRequest -Uri 'http://localhost:8080/ping' -UseBasicParsing -TimeoutSec 1|Out-Null;exit 0}catch{exit 1}" ^
+      >nul 2>&1
+    if !errorlevel! EQU 0 goto :SERVER_READY
+    timeout /t 1 /nobreak >nul
+    goto :WAIT_LOOP
+
+:SERVER_TIMEOUT
+    echo [!date! !time!] ERROR: Server did not respond in 30 s. >> "!LOG!"
+    echo.
+    echo  Launcher server failed to start. See launcher.log for details.
+    echo.
+    pause
+    exit /b 1
+
+:SERVER_READY
+echo [!date! !time!] Server ready. >> "!LOG!"
+
+:: ---- Start the panic exit listener -----------------------
+echo [!date! !time!] Starting panic listener (Ctrl+Alt+Shift+Q)... >> "!LOG!"
+start "FyxxPanic" /min powershell.exe ^
+    -ExecutionPolicy Bypass ^
+    -WindowStyle Hidden ^
+    -NonInteractive ^
+    -File "!DIR!panic_exit.ps1"
+
+:: ---- Clear stale Chrome singleton files ------------------
+:: Chrome's launcher process checks these files to detect an existing
+:: instance. If they survived a crash or force-kill, Chrome delegates
+:: to the dead instance and the launcher process exits in ~180ms —
+:: making start.bat see a false "exit" while the browser window is
+:: still visible. Deleting them before launch prevents this.
+if exist "!DIR!chrome_profile_kiosk\SingletonLock"   del /f /q "!DIR!chrome_profile_kiosk\SingletonLock"
+if exist "!DIR!chrome_profile_kiosk\SingletonCookie" del /f /q "!DIR!chrome_profile_kiosk\SingletonCookie"
+if exist "!DIR!chrome_profile_kiosk\SingletonSocket" del /f /q "!DIR!chrome_profile_kiosk\SingletonSocket"
+
+:: ---- Launch Chrome ----------------------------------------
+:: Launched with 'start ""' (non-blocking / fire-and-forget).
+::
+:: WHY: Chrome's initial chrome.exe is a singleton-checker/launcher.
+:: It forks to a child "browser" process and exits in ~180ms. Running
+:: Chrome synchronously (as v2 did) made start.bat see this fast exit,
+:: skip to cleanup, and kill the server — leaving the visible Chrome
+:: window with no backend. The fix is to launch async and then poll
+:: tasklist until ALL chrome.exe processes are gone.
+::
+:: --start-fullscreen is used instead of --kiosk during testing:
+:: visually identical but Alt+F4 and OS-level exits still work.
+:: Switch back to --kiosk only after end-to-end verification.
+echo [!date! !time!] Launching Chrome... >> "!LOG!"
+start "" "!CHROME!" ^
+    --start-fullscreen ^
+    --no-first-run ^
+    --disable-infobars ^
+    --disable-session-crashed-bubble ^
+    --disable-restore-session-state ^
+    --no-default-browser-check ^
+    --disable-translate ^
+    --disable-features=TranslateUI ^
+    --password-store=basic ^
+    --use-mock-keychain ^
+    --user-data-dir="!DIR!chrome_profile_kiosk" ^
+    "http://localhost:8080"
+
+:: Give Chrome time to fork from launcher process to browser process
+timeout /t 4 /nobreak >nul
+echo [!date! !time!] Chrome launched — polling for close... >> "!LOG!"
+
+:: ---- Poll until all chrome.exe processes are gone --------
+:CHROME_WAIT
+    tasklist /FI "IMAGENAME eq chrome.exe" /NH 2>nul | findstr /i /c:"chrome.exe" >nul 2>&1
+    if !errorlevel! EQU 0 (
+        timeout /t 2 /nobreak >nul
+        goto :CHROME_WAIT
+    )
+
+:: ---- Cleanup: kill server and panic listener by window title
+:: Does NOT use 'taskkill /IM powershell.exe' — that would kill
+:: every PowerShell on the machine including the admin window.
+echo [!date! !time!] Chrome closed — stopping server and panic listener. >> "!LOG!"
+taskkill /FI "WINDOWTITLE eq FyxxServer" /F /T >nul 2>&1
+taskkill /FI "WINDOWTITLE eq FyxxPanic"  /F /T >nul 2>&1
+echo [!date! !time!] Kiosk stopped. >> "!LOG!"
+
+endlocal
+'@
+
+Set-Content -Path (Join-Path $Target "start.bat") -Value $startBat -Encoding ASCII
+Write-Host "Written     start.bat"
+
+# ==============================================================
+# 2 of 4 — launcher_server.ps1
+# ==============================================================
+$launcherServer = @'
+# ==============================================================
+# Fyxx POS Kiosk — Launcher Server
+# Runs an HTTP server on localhost:8080.
+# Launched by start.bat; do not run this script directly.
+# ==============================================================
+
+# ==============================================================
+#  CONFIG  — edit ONLY this block
+# ==============================================================
+$AdminPassword = "admin1234"
+
+$ServerPort    = 8080
+
+# Full path to Chrome executable (auto-detected if left empty)
+$ChromeExe     = ""
+
+# TGR Dine-In — launched as a Chrome App via chrome_proxy
+$TGRExe        = "C:\Program Files\Google\Chrome\Application\chrome_proxy.exe"
+$TGRArgs       = @(
+    "--profile-directory=`"Profile 4`"",
+    "--app-id=jpofjnaefngkijignheehkddokdjbglo"
+)
+
+# Sonos
+$SonosExe      = "C:\Program Files (x86)\SonosV2\Sonos.exe"
+
+# Spotify
+$SpotifyExe    = "C:\Users\NCR\AppData\Roaming\Spotify\Spotify.exe"
+
+# By The Glass (Wine Monitor)
+$BTGExe        = "C:\Users\NCR\AppData\Local\WineMonitor\Wine Monitor.exe"
+# ==============================================================
+#  END CONFIG
+# ==============================================================
+
+$LauncherDir = $PSScriptRoot
+$LogFile     = Join-Path $LauncherDir "launcher.log"
+
+function Write-Log($msg) {
+    $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $line = "$ts  $msg"
+    $line | Out-File $LogFile -Append -Encoding UTF8
+    Write-Host $line
+}
+
+# ---------- Auto-detect Chrome if path not specified ----------
+if ([string]::IsNullOrEmpty($ChromeExe)) {
+    foreach ($c in @(
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+    )) {
+        if (Test-Path $c) { $ChromeExe = $c; break }
+    }
+}
+if (-not (Test-Path $ChromeExe)) {
+    Write-Log "ERROR: Chrome not found. Set ChromeExe in CONFIG block."
+    exit 1
+}
+Write-Log "Chrome:  $ChromeExe"
+
+# ---------- HTTP helpers -------------------------------------
+function Send-Bytes($context, $bytes, $contentType, $statusCode = 200) {
+    $context.Response.StatusCode      = $statusCode
+    $context.Response.ContentType     = $contentType
+    $context.Response.ContentLength64 = $bytes.Length
+    $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+    $context.Response.OutputStream.Close()
+}
+
+function Send-Json($context, $obj, $statusCode = 200) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Compress))
+    Send-Bytes $context $bytes "application/json; charset=utf-8" $statusCode
+}
+
+function Send-Text($context, $text, $statusCode = 200) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    Send-Bytes $context $bytes "text/plain; charset=utf-8" $statusCode
+}
+
+function Read-Body($context) {
+    ([System.IO.StreamReader]::new(
+        $context.Request.InputStream,
+        $context.Request.ContentEncoding
+    )).ReadToEnd()
+}
+
+# ---------- Start the HTTP listener --------------------------
+Write-Log "Starting server on port $ServerPort"
+$listener = [System.Net.HttpListener]::new()
+$listener.Prefixes.Add("http://localhost:$ServerPort/")
+try {
+    $listener.Start()
+    Write-Log "Server ready — http://localhost:$ServerPort/"
+} catch {
+    Write-Log "ERROR starting server: $_"
+    exit 1
+}
+
+$indexPath = Join-Path $LauncherDir "index.html"
+
+# ---------- Request loop -------------------------------------
+while ($listener.IsListening) {
+    $context = $null
+    try {
+        $context = $listener.GetContext()
+        $method  = $context.Request.HttpMethod
+        $path    = $context.Request.Url.AbsolutePath
+        Write-Log "$method $path"
+
+        # GET / or /index.html — serve the launcher page
+        if ($path -eq "/" -or $path -eq "/index.html") {
+            if (Test-Path $indexPath) {
+                Send-Bytes $context ([System.IO.File]::ReadAllBytes($indexPath)) "text/html; charset=utf-8"
+            } else {
+                Send-Text $context "index.html not found at $indexPath" 404
+            }
+
+        # GET /ping — health check used by start.bat readiness loop
+        } elseif ($path -eq "/ping") {
+            Send-Text $context "OK"
+
+        # POST /launch/tgr — TGR Dine-In Chrome App
+        } elseif ($path -eq "/launch/tgr") {
+            Write-Log "Launching TGR Dine-In"
+            if (Test-Path $TGRExe) {
+                Start-Process $TGRExe -ArgumentList $TGRArgs
+                Send-Json $context @{ success = $true; app = "tgr" }
+            } else {
+                Write-Log "TGR exe not found: $TGRExe"
+                Send-Json $context @{ success = $false; error = "TGR Dine-In not found. Check TGRExe in CONFIG." } 503
+            }
+
+        # POST /launch/sonos
+        } elseif ($path -eq "/launch/sonos") {
+            Write-Log "Launching Sonos"
+            if (Test-Path $SonosExe) {
+                Start-Process $SonosExe
+                Send-Json $context @{ success = $true; app = "sonos" }
+            } else {
+                Write-Log "Sonos exe not found: $SonosExe"
+                Send-Json $context @{ success = $false; error = "Sonos not found. Check SonosExe in CONFIG." } 503
+            }
+
+        # POST /launch/spotify
+        } elseif ($path -eq "/launch/spotify") {
+            Write-Log "Launching Spotify"
+            if (Test-Path $SpotifyExe) {
+                Start-Process $SpotifyExe
+                Send-Json $context @{ success = $true; app = "spotify" }
+            } else {
+                Write-Log "Spotify exe not found: $SpotifyExe"
+                Send-Json $context @{ success = $false; error = "Spotify not found. Check SpotifyExe in CONFIG." } 503
+            }
+
+        # POST /launch/btg — By The Glass (Wine Monitor)
+        } elseif ($path -eq "/launch/btg") {
+            Write-Log "Launching By The Glass"
+            if (Test-Path $BTGExe) {
+                Start-Process $BTGExe
+                Send-Json $context @{ success = $true; app = "btg" }
+            } else {
+                Write-Log "BTG exe not found: $BTGExe"
+                Send-Json $context @{ success = $false; error = "By The Glass not found. Check BTGExe in CONFIG." } 503
+            }
+
+        # POST /admin/exit — verify password, kill Chrome, stop server
+        } elseif ($path -eq "/admin/exit") {
+            $body = Read-Body $context
+            try   { $data = $body | ConvertFrom-Json; $pw = $data.password }
+            catch { $pw = "" }
+
+            if ($pw -eq $AdminPassword) {
+                Write-Log "Admin exit AUTHORIZED — shutting down"
+                Send-Json $context @{ success = $true }
+                Start-Sleep -Milliseconds 400    # let response reach browser
+                Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
+                $listener.Stop()                 # exits the while loop
+            } else {
+                Write-Log "Admin exit DENIED — wrong password"
+                Send-Json $context @{ success = $false; error = "Incorrect password." } 401
+            }
+
+        } else {
+            Send-Text $context "Not Found" 404
+        }
+
+    } catch [System.Net.HttpListenerException] {
+        break   # listener stopped — clean shutdown
+    } catch {
+        Write-Log "Request error: $_"
+        try { $context.Response.OutputStream.Close() } catch {}
+    }
+}
+
+Write-Log "Launcher server stopped."
+'@
+
+Set-Content -Path (Join-Path $Target "launcher_server.ps1") -Value $launcherServer -Encoding UTF8
+Write-Host "Written     launcher_server.ps1"
+
+# ==============================================================
+# 3 of 4 — panic_exit.ps1  (new in v3)
+# ==============================================================
+$panicExit = @'
+# ==============================================================
+# Fyxx POS Kiosk — Panic Exit Listener
+# Polls GetAsyncKeyState for Ctrl+Alt+Shift+Q and force-kills
+# all kiosk processes when the combo is detected.
+# Launched by start.bat alongside the HTTP server.
+# ==============================================================
+
+$LauncherDir = $PSScriptRoot
+$LogFile     = Join-Path $LauncherDir "launcher.log"
+
+function Write-Log($msg) {
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$ts  PANIC: $msg" | Out-File $LogFile -Append -Encoding UTF8
+    Write-Host "$ts  PANIC: $msg"
+}
+
+# PInvoke GetAsyncKeyState — works from any process regardless of focus
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class KioskKeyboard {
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+}
+"@ -ErrorAction SilentlyContinue
+
+Write-Log "Panic listener started (Ctrl+Alt+Shift+Q to force-exit)"
+
+while ($true) {
+    # VK_CONTROL=0x11  VK_MENU(Alt)=0x12  VK_SHIFT=0x10  Q=0x51
+    $ctrl  = ([KioskKeyboard]::GetAsyncKeyState(0x11) -band 0x8000) -ne 0
+    $alt   = ([KioskKeyboard]::GetAsyncKeyState(0x12) -band 0x8000) -ne 0
+    $shift = ([KioskKeyboard]::GetAsyncKeyState(0x10) -band 0x8000) -ne 0
+    $q     = ([KioskKeyboard]::GetAsyncKeyState(0x51) -band 0x8000) -ne 0
+
+    if ($ctrl -and $alt -and $shift -and $q) {
+        Write-Log "Ctrl+Alt+Shift+Q detected — killing all kiosk processes"
+
+        # Chrome (covers kiosk launcher + TGR Dine-In window)
+        Stop-Process -Name "chrome"  -Force -ErrorAction SilentlyContinue
+
+        # Sonos
+        Stop-Process -Name "Sonos"   -Force -ErrorAction SilentlyContinue
+
+        # Spotify
+        Stop-Process -Name "Spotify" -Force -ErrorAction SilentlyContinue
+
+        # Wine Monitor (process name has a space — match by wildcard)
+        Get-Process | Where-Object { $_.Name -like "Wine Monitor*" } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+        # Launcher server (kill by command-line pattern; window-title
+        # filtering is unreliable for hidden PS processes)
+        Get-WmiObject Win32_Process | Where-Object {
+            $_.Name -eq "powershell.exe" -and $_.CommandLine -like "*launcher_server*"
+        } | ForEach-Object {
+            Stop-Process -Id ([int]$_.ProcessId) -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Log "Panic exit complete"
+        break
+    }
+
+    Start-Sleep -Milliseconds 150
+}
+'@
+
+Set-Content -Path (Join-Path $Target "panic_exit.ps1") -Value $panicExit -Encoding UTF8
+Write-Host "Written     panic_exit.ps1"
+
+# ==============================================================
+# 4 of 4 — index.html
+# ==============================================================
+$indexHtml = @'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -700,3 +1160,20 @@
 
 </body>
 </html>
+'@
+
+Set-Content -Path (Join-Path $Target "index.html") -Value $indexHtml -Encoding UTF8
+Write-Host "Written     index.html"
+
+Write-Host ""
+Write-Host "============================================="
+Write-Host " v3 deployment complete."
+Write-Host " Files written to: $Target"
+Write-Host "============================================="
+Write-Host ""
+Write-Host "Next step:"
+Write-Host "  cmd /c `"$Target\start.bat`""
+Write-Host ""
+Write-Host "Test sequence:"
+Write-Host "  1. Immediately press Ctrl+Alt+Shift+Q — should kill everything"
+Write-Host "  2. Only if panic exit works: test tiles and admin modal"
